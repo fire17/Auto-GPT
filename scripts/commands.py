@@ -12,6 +12,7 @@ from json_parser import fix_and_parse_json
 from duckduckgo_search import ddg
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
+import time
 
 cfg = Config()
 
@@ -43,66 +44,227 @@ def get_command(response):
     except Exception as e:
         return "Error:", str(e)
 
-
-def execute_command(command_name, arguments):
-    try:
-        if command_name == "google":
-            
-            # Check if the Google API key is set and use the official search method
-            # If the API key is not set or has only whitespaces, use the unofficial search method
-            if cfg.google_api_key and (cfg.google_api_key.strip() if cfg.google_api_key else None):
-                return google_official_search(arguments["input"])
-            else:
-                return google_search(arguments["input"])
-        elif command_name == "memory_add":
-            return commit_memory(arguments["string"])
-        elif command_name == "memory_del":
-            return delete_memory(arguments["key"])
-        elif command_name == "memory_ovr":
-            return overwrite_memory(arguments["key"], arguments["string"])
-        elif command_name == "start_agent":
-            return start_agent(
-                arguments["name"],
-                arguments["task"],
-                arguments["prompt"])
-        elif command_name == "message_agent":
-            return message_agent(arguments["key"], arguments["message"])
-        elif command_name == "list_agents":
-            return list_agents()
-        elif command_name == "delete_agent":
-            return delete_agent(arguments["key"])
-        elif command_name == "get_text_summary":
-            return get_text_summary(arguments["url"], arguments["question"])
-        elif command_name == "get_hyperlinks":
-            return get_hyperlinks(arguments["url"])
-        elif command_name == "read_file":
-            return read_file(arguments["file"])
-        elif command_name == "write_to_file":
-            return write_to_file(arguments["file"], arguments["text"])
-        elif command_name == "append_to_file":
-            return append_to_file(arguments["file"], arguments["text"])
-        elif command_name == "delete_file":
-            return delete_file(arguments["file"])
-        elif command_name == "browse_website":
-            return browse_website(arguments["url"], arguments["question"])
+available_commands = {
+    "google": {
+        "name": "Google",
+        "desc": "For when you need to search Google to answer specific questions about current information or find websites.",
+        "args": {
+            "input": "<search_query>"
+        },
+        "cmd_id": 1,        
+        # Check if the Google API key is set and use the official search method
+        # If the API key is not set or has only whitespaces, use the unofficial search method
+        "adapter": lambda **args: google_official_search(args["input"]) if cfg.google_api_key and (cfg.google_api_key.strip() if cfg.google_api_key else None) else google_search(args["input"])
+    },
+    "memory_add": {
+        "name": "Memory Add",
+        "desc": 'For when you need to write information to long term memory (key-value dictionary). The default key "$time" can be used for sequential memory or when a key is not needed.',
+        "args": {
+            "key": "<key>",
+            "value": "<string>"
+        },
+        "cmd_id": 2,
+        "adapter": lambda **args: commit_memory(args["key"], args["value"])
+    },
+    "memory_del": {
+        "name": "Memory Delete",
+        "desc": "For when you need to remove long term memories.",
+        "args": {
+            "key": "<key>"
+        },
+        "cmd_id": 3,
+        "adapter": lambda **args: delete_memory(args["key"])
+    },
+    "memory_ovr": {
+        "name": "Memory Overwrite",
+        "desc": "For when you need to replace a long term memory value.",
+        "args": {
+            "key": "<key>",
+            "value": "<string>"
+        },
+        "cmd_id": 4,
+        "adapter": lambda **args: overwrite_memory(args["key"], args["value"])
+    },
+    "browse_website": {
+        "name": "Browse Website",
+        "desc": "For when you need to visit a web page and get a summary from it. Optionally include a specific question you'd like to find the answer to.",
+        "args": {
+            "url": "<url>",
+            "question": "<what_you_want_to_find_on_website>"
+        },
+        "cmd_id": 5,
+        "adapter": lambda **args: browse_website(args["url"], args["question"])
+    },
+    "start_agent": {
+        "name": "Start GPT Agent",
+        "desc": "For when you need to start a new ChatGPT3.5 powered agent. Not to be used for web browsing.",
+        "args": {
+            "name": "<name>",
+            "task": "<short_task_desc>",
+            "prompt": "<prompt>"
+        },
+        "cmd_id": 6,
+        "adapter": lambda **args: start_agent(args["name"], args["task"], args["prompt"])
+    },
+    "message_agent": {
+        "name": "Message GPT Agent",
+        "desc": "For when you need to message an agent. An agent must be started before it can be messaged. If unsure if an agent exists use list agents first.",
+        "args": {
+            "key": "<key>",
+            "message": "<message>"
+        },
+        "cmd_id": 7,
+        "adapter": lambda **args: message_agent(args["key"], args["message"])
+    },
+    "list_agents": {
+        "name": "List GPT Agents",
+        "desc": "Used to list current GPT agents.",
+        "args": {},
+        "cmd_id": 8,
+        "adapter": lambda **args: list_agents()
+    },
+    "delete_agent": {
+        "name": "Delete GPT Agent",
+        "desc": "Used to delete an agent.",
+        "args": {
+            "key": "<key>"
+        },
+        "cmd_id": 9,
+        "adapter": lambda **args: delete_agent(args["key"])
+    },
+    "write_to_file": {
+        "name": "Write to file",
+        "desc": "Used to write a file to disk.",
+        "args": {
+            "file": "<file>",
+            "text": "<text>"
+        },
+        "cmd_id": 10,
+        "adapter": lambda **args: write_to_file(args["file"], args["text"])
+    },
+    "read_file": {
+        "name": "Read File",
+        "desc": "Used to read a file from disk.",
+        "args": {
+            "file": "<file>"
+        },
+        "cmd_id": 11,
+        "adapter": lambda **args: read_file(args["file"])
+    },
+    "append_to_file": {
+        "name": "Append to file",
+        "desc": "Used to add to a file on disk.",
+        "args": {
+            "file": {"type": str, "desc": "<file>"},
+            "text": "<text>"
+        },
+        "cmd_id": 12,
+        "adapter": lambda **args: append_to_file(args["file"], args["text"])
+    },
+    "delete_file": {
+        "name": "Delete File",
+        "desc": "Used to delete a file on disk.",
+        "args": {
+            "file": "<file>"
+        },
+        "cmd_id": 13,
+        "adapter": lambda **args: delete_file(args["file"])
+    },    
+    "evaluate_code": {
         # TODO: Change these to take in a file rather than pasted code, if
         # non-file is given, return instructions "Input should be a python
         # filepath, write your code to file and try again"
-        elif command_name == "evaluate_code":
-            return ai.evaluate_code(arguments["code"])
-        elif command_name == "improve_code":
-            return ai.improve_code(arguments["suggestions"], arguments["code"])
-        elif command_name == "write_tests":
-            return ai.write_tests(arguments["code"], arguments.get("focus"))
-        elif command_name == "execute_python_file":  # Add this command
-            return execute_python_file(arguments["file"])
-        elif command_name == "task_complete":
-            shutdown()
+        "name": "Evaluate Code",
+        "desc": "Used to analyse and get suggestions to improve some code.",
+        "args": {
+            "code": "<full_code_string>"
+        },
+        "cmd_id": 14,
+        "adapter": lambda **args: ai.evaluate_code(args["code"])
+    },
+    "improve_code": {
+        "name": "Get Improved Code",
+        "desc": "Used to improve an existing code block.",
+        "args": {
+            "suggestions": "<list_of_suggestions>",
+            "code": "<full_code_string>"
+        },
+        "cmd_id": 15,
+        "adapter": lambda **args: ai.improve_code(args["suggestions"], args["code"])
+    },
+    "write_tests": {
+        "name": "Write Tests",
+        "desc": "Used to write tests for a block of code.",
+        "args": {
+            "code": "<full_code_string>",
+            "focus": "<list_of_focus_areas>"
+        },
+        "cmd_id": 16,
+        "adapter": lambda **args: ai.write_tests(args["code"], args["focus"])
+    },
+    "execute_python_file": {
+        "name": "Execute Python File",
+        "desc": "Used to execute a python file on disk.",
+        "args": {
+            "file": "<file>"
+        },
+        "cmd_id": 17,
+        "adapter": lambda **args: execute_python_file(args["file"])
+    },
+    "task_complete": {
+        "name": "Task Complete (Shutdown)",
+        "desc": "Used when you are finished and shuts down the process.",
+        "args": {
+            "reason": "<reason>"
+        },
+        "cmd_id": 18,
+        "adapter": lambda **args: shutdown(args["reason"])
+    },
+    "get_datetime": {
+        "name": "Current Datetime",
+        "desc": "Used when the current datetime is needed.",
+        "args": {},
+        "cmd_id": 19,
+        "adapter": lambda **args: get_datetime()
+    }, 
+    "get_url_text_summary": {
+        "name": "Url Text Summary",
+        "desc": "For when you need to visit a web page and get a summary from it. Optionally include a specific question you'd like to find the answer to.",
+        "args": {
+            "url": "<url>",
+            "question": "<what_you_want_to_find_on_website>"
+        },
+        "cmd_id": 20,
+        "adapter": lambda **args: get_text_summary(args["url"], args["question"] if "question" in args else "Make an executive summery.")
+    },
+    "get_hyperlinks": {
+        "name": "Get Hyperlinks",
+        "desc": "Get all the hyperlinks from a given webpage. Used when exploring a webpage",
+        "args": {
+            "url": "<url>"},
+        "cmd_id": 21,
+        "adapter": lambda **args: get_hyperlinks(args["url"])
+    },
+}
+
+
+def execute_command(command_name, arguments):
+    try:
+        if command_name in available_commands and available_commands[command_name]:
+            if "adapter" in available_commands[command_name]:
+                adapter_func = available_commands[command_name]["adapter"]
+                if adapter_func is not None:
+                    adapter_func(**arguments)
+                else:
+                    print(" ::: Adapter function is None :::",command_name, ":::", arguments)
+            else:
+                print(" ::: Adapter function not available :::",command_name, ":::", arguments)
         else:
-            return f"Unknown command {command_name}"
+            print(f"::: Could Not find command {command_name} ::: args: {arguments}")
+            #TODO: Add ability to dynamically create and add to available_commands
     # All errors, return "Error: + error message"
     except Exception as e:
-        return "Error: " + str(e)
+        return " ::: Error: " + str(e)
 
 
 def get_datetime():
@@ -176,28 +338,30 @@ def get_hyperlinks(url):
     return link_list
 
 
-def commit_memory(string):
-    _text = f"""Committing memory with string "{string}" """
-    mem.permanent_memory.append(string)
+def commit_memory(key, value):
+    default_key = "$time"
+    if key == default_key:
+        key = "_"+str(time.time())
+    _text = f"""Committing memory (key:value) "{key}":"{value}" """
+    mem.permanent_memory[key] = value
     return _text
 
 
 def delete_memory(key):
-    if key >= 0 and key < len(mem.permanent_memory):
+    if key in mem.permanent_memory:
         _text = "Deleting memory with key " + str(key)
-        del mem.permanent_memory[key]
-        print(_text)
+        mem.permanent_memory.pop(key)
         return _text
     else:
         print("Invalid key, cannot delete memory.")
         return None
 
 
-def overwrite_memory(key, string):
-    if int(key) >= 0 and key < len(mem.permanent_memory):
+def overwrite_memory(key, value):
+    if key in mem.permanent_memory:
         _text = "Overwriting memory with key " + \
-            str(key) + " and string " + string
-        mem.permanent_memory[key] = string
+            str(key) + " and value " + value
+        mem.permanent_memory[key] = value
         print(_text)
         return _text
     else:
@@ -205,8 +369,10 @@ def overwrite_memory(key, string):
         return None
 
 
-def shutdown():
+def shutdown(reason = None):
     print("Shutting down...")
+    if reason:
+        print("Provided Reason:",reason)
     quit()
 
 
